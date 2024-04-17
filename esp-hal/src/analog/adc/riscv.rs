@@ -399,7 +399,7 @@ impl super::CalibrationAccess for crate::peripherals::ADC2 {
 /// Analog-to-Digital Converter peripheral driver.
 pub struct ADC<'d, ADCI> {
     _adc: PeripheralRef<'d, ADCI>,
-    attenuations: [Option<Attenuation>; NUM_ATTENS],
+    pub(crate) attenuations: [Option<Attenuation>; NUM_ATTENS],
     active_channel: Option<u8>,
 }
 

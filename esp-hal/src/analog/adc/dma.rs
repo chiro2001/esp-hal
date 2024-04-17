@@ -3,9 +3,11 @@
 //! TBD.
 
 use embedded_dma::WriteBuffer;
+use fugit::HertzU32;
 
 use super::*;
 use crate::{
+    clock::Clocks,
     dma::{AdcPeripheral, Channel, ChannelTypes, DmaError, DmaPeripheral, DmaTransfer, RxPrivate},
     peripherals,
     Mode,
@@ -52,27 +54,22 @@ where
     C::P: AdcPeripheral,
     DmaMode: Mode,
 {
-    pub fn dma_read<'t, RXBUF>(
+    pub fn dma_read<'t, RXBUF, PIN>(
         &'t mut self,
+        _pin: &AdcPin<PIN, ADCI, ()>,
+        sample_freq: HertzU32,
         rxbuf: &'t mut RXBUF,
+        clocks: &Clocks,
     ) -> Result<AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>, Error>
     where
         RXBUF: WriteBuffer<Word = u8>,
+        PIN: AdcChannel,
     {
         let (ptr, len) = unsafe { rxbuf.write_buffer() };
 
         const ADC_LL_CLKM_DIV_NUM_DEFAULT: u8 = 15;
         const ADC_LL_CLKM_DIV_B_DEFAULT: u8 = 1;
         const ADC_LL_CLKM_DIV_A_DEFAULT: u8 = 0;
-
-        // let sample_freq_hz = 80_000;
-        // let clk_src_freq_hz = 5_000_000;
-        // let interval = clk_src_freq_hz
-        //     / (ADC_LL_CLKM_DIV_NUM_DEFAULT + ADC_LL_CLKM_DIV_A_DEFAULT /
-        // ADC_LL_CLKM_DIV_B_DEFAULT + 1)     / 2
-        //     / sample_freq_hz;
-
-        // info!("interval: {}", interval);
 
         let saradc = &*unsafe { peripherals::APB_SARADC::steal() };
         // stop adc
@@ -131,28 +128,41 @@ where
             //         uint8_t val;
             //     };
             // } __attribute__((packed)) adc_ll_digi_pattern_table_t;
-            let pattern = [3u32, 0, 0, 12];
+            let atten = self.adc.attenuations[PIN::CHANNEL as usize].unwrap();
+            // ADC1 only
+            let unit = 0;
             let pattern_val =
-                (pattern[0] & 0x3) | ((pattern[1] & 0x7) << 2) | ((pattern[2] & 0x1) << 5);
+                (atten as u32 & 0x3) | ((PIN::CHANNEL as u32 & 0x7) << 2) | ((unit & 0x1) << 5);
+            // one pattern only
             let pattern_index = 0;
-            let tab = saradc.sar_patt_tab1().read().bits();
-            // defmt::info!("read tab {:x}", tab);
             let _index = pattern_index / 4;
             let offset = (pattern_index % 4) * 6;
-            let mut tab = tab;
+            let mut tab = saradc.sar_patt_tab1().read().bits();
             tab &= !(0xFC0000 >> offset);
             tab |= ((pattern_val & 0x3F) << 18) >> offset;
             saradc
                 .sar_patt_tab1()
                 .write(|w| unsafe { w.saradc_sar_patt_tab1().bits(tab) });
-            // defmt::info!("set tab to {:x}", tab);
         }
+        let apb_clk_freq = clocks.apb_clock.to_Hz();
+        let interval = (apb_clk_freq
+            / (ADC_LL_CLKM_DIV_NUM_DEFAULT
+                + ADC_LL_CLKM_DIV_A_DEFAULT / ADC_LL_CLKM_DIV_B_DEFAULT
+                + 1) as u32
+            / 2
+            / sample_freq.to_Hz()) as u16;
+        // defmt::info!(
+        //     "apb_clk_freq: {}, sample_freq: {}, interval: {}, old: {}",
+        //     apb_clk_freq,
+        //     sample_freq.to_Hz(),
+        //     interval,
+        //     0b111111111011
+        // );
         saradc.ctrl2().modify(|_, w| unsafe {
             // w.saradc_meas_num_limit().set_bit();
             w.saradc_meas_num_limit().clear_bit();
             w.saradc_max_meas_num().bits(10);
-            // dump
-            w.saradc_timer_target().bits(0b111111111011);
+            w.saradc_timer_target().bits(interval);
             w
         });
         // reset adc digital controller
