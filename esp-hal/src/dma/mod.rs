@@ -429,6 +429,9 @@ pub trait AesPeripheral: PeripheralMarker {}
 /// Marks channels as usable for LCD_CAM
 pub trait LcdCamPeripheral: PeripheralMarker {}
 
+/// Marks channels as usable for SARADC
+pub trait AdcPeripheral: PeripheralMarker {}
+
 /// DMA Rx
 pub trait Rx: RxPrivate {}
 

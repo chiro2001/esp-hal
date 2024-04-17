@@ -383,6 +383,7 @@ impl<const N: u8> ParlIoPeripheral for SuitablePeripheral<N> {}
 impl<const N: u8> AesPeripheral for SuitablePeripheral<N> {}
 #[cfg(lcd_cam)]
 impl<const N: u8> LcdCamPeripheral for SuitablePeripheral<N> {}
+impl<const N: u8> AdcPeripheral for SuitablePeripheral<N> {}
 
 macro_rules! impl_channel {
     ($num: literal, $async_handler: path, $($interrupt: ident),* ) => {

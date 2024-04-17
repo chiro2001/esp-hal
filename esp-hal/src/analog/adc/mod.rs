@@ -30,6 +30,9 @@ pub use self::implementation::*;
 #[cfg_attr(any(esp32s2, esp32s3), path = "xtensa.rs")]
 mod implementation;
 
+#[cfg(esp32c3)]
+pub mod dma;
+
 /// The attenuation of the ADC pin.
 ///
 /// The effective measurement range for a given attuenation is dependent on the
