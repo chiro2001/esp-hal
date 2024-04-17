@@ -6,7 +6,7 @@ use embedded_dma::WriteBuffer;
 
 use super::*;
 use crate::{
-    dma::{AdcPeripheral, Channel, ChannelTypes, DmaError, DmaPeripheral, RxPrivate},
+    dma::{AdcPeripheral, Channel, ChannelTypes, DmaError, DmaPeripheral, DmaTransfer, RxPrivate},
     peripherals,
     Mode,
 };
@@ -173,6 +173,7 @@ where
         rx.prepare_transfer_without_start(false, DmaPeripheral::Adc, ptr, len)
             .unwrap();
         rx.listen_eof();
+        rx.listen_ch_in_done();
         rx.start_transfer().unwrap();
         // connect DMA and peripheral
         saradc.dma_conf().modify(|_, w| w.apb_adc_trans().set_bit());
@@ -187,24 +188,39 @@ pub struct AdcDmaTransfer<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> {
 }
 
 impl<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode> {
-    pub fn wait(mut self) -> Result<(), Error> {
+    pub fn stop(&mut self) -> Result<(), Error> {
         let saradc = &*unsafe { peripherals::APB_SARADC::steal() };
-        let rx = &mut self.adc_dma.channel.rx;
-        // rx.wait().map_err(|e| Error::DmaError(e))?;
-        while !rx.is_done() {}
-        // stop adc
         saradc
             .ctrl2()
             .modify(|_, w| w.saradc_timer_en().clear_bit());
-        // saradc.ctrl().modify(|_, w| {
-        //     w.saradc_start_force()
-        //         .clear_bit()
-        //         .saradc_start()
-        //         .clear_bit()
-        // });
-        // stop dma
-        // rx.stop_transfer().map_err(|e| Error::DmaError(e))?;
+        self.adc_dma.channel.rx.unlisten_ch_in_done();
+        self.adc_dma.channel.rx.unlisten_eof();
         Ok(())
+    }
+}
+
+impl<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> DmaTransfer
+    for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+{
+    fn wait(mut self) -> Result<(), DmaError> {
+        while !self.is_done() {}
+        self.stop().map_err(|_| DmaError::Exhausted)?;
+        let rx = &self.adc_dma.channel.rx;
+        if rx.has_error() || rx.has_dscr_empty_error() || rx.has_eof_error() {
+            return Err(DmaError::DescriptorError);
+        }
+        Ok(())
+    }
+
+    fn is_done(&self) -> bool {
+        self.adc_dma.channel.rx.is_done()
+    }
+}
+impl<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> Drop
+    for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+{
+    fn drop(&mut self) {
+        self.stop().ok();
     }
 }
 
