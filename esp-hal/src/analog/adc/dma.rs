@@ -196,41 +196,70 @@ where
 pub struct AdcDmaTransfer<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> {
     adc_dma: &'t mut AdcDma<'d, ADCI, C, DmaMode>,
 }
-
-impl<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode> {
-    pub fn stop(&mut self) -> Result<(), Error> {
+impl<'t, 'd, ADCI, C, DmaMode> AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+where
+    C: ChannelTypes,
+    DmaMode: Mode,
+{
+    pub fn stop(&self) {
         let saradc = &*unsafe { peripherals::APB_SARADC::steal() };
         saradc
             .ctrl2()
             .modify(|_, w| w.saradc_timer_en().clear_bit());
         self.adc_dma.channel.rx.unlisten_ch_in_done();
         self.adc_dma.channel.rx.unlisten_eof();
-        Ok(())
     }
-}
-
-impl<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> DmaTransfer
-    for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
-{
-    fn wait(mut self) -> Result<(), DmaError> {
-        while !self.is_done() {}
-        self.stop().map_err(|_| DmaError::Exhausted)?;
+    fn has_dma_error(&self) -> Result<(), DmaError> {
         let rx = &self.adc_dma.channel.rx;
         if rx.has_error() || rx.has_dscr_empty_error() || rx.has_eof_error() {
             return Err(DmaError::DescriptorError);
         }
         Ok(())
     }
+}
+impl<'t, 'd, ADCI, C, DmaMode> DmaTransfer for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+where
+    C: ChannelTypes,
+    DmaMode: Mode,
+{
+    fn wait(mut self) -> Result<(), DmaError> {
+        while !self.is_done() {}
+        self.stop();
+        self.has_dma_error()
+    }
 
     fn is_done(&self) -> bool {
         self.adc_dma.channel.rx.is_done()
     }
 }
-impl<'t, 'd, ADCI, C: ChannelTypes, DmaMode: Mode> Drop
-    for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+impl<'t, 'd, ADCI, C, DmaMode> Drop for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+where
+    C: ChannelTypes,
+    DmaMode: Mode,
 {
     fn drop(&mut self) {
-        self.stop().ok();
+        self.stop()
+    }
+}
+impl<'t, 'd, ADCI, C, DmaMode> core::future::Future for AdcDmaTransfer<'t, 'd, ADCI, C, DmaMode>
+where
+    C: ChannelTypes,
+    DmaMode: Mode,
+{
+    type Output = Result<(), Error>;
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        let rx = &self.adc_dma.channel.rx;
+        C::Rx::waker().register(cx.waker());
+        if !rx.is_listening_ch_in_done() {
+            core::task::Poll::Pending
+        } else {
+            self.stop();
+            core::task::Poll::Ready(self.has_dma_error().map_err(|e| Error::DmaError(e)))
+        }
     }
 }
 
